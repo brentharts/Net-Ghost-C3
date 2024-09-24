@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-import os, sys, subprocess, ctypes, time, json
+import os, sys, subprocess, ctypes, time, json, webbrowser
 from random import random, uniform
 
 _thisdir = os.path.split(os.path.abspath(__file__))[0]
@@ -239,10 +239,112 @@ struct Verts2D{
 	float r, g, b;
 };
 
+GLint program;
+GLint mvp_location, vpos_location, vcol_location;
+
+
+'''
+
+GLFW_WIN = '''
+GLFWwindow *window;
+
+EMSCRIPTEN_KEEPALIVE
+extern void netghost_window_init() {
+	if (!glfwInit()) exit(EXIT_FAILURE);
+	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 2);
+	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
+	window = glfwCreateWindow(640, 480, "Simple example", NULL, NULL);
+	if (!window) {
+		glfwTerminate();
+		exit(EXIT_FAILURE);
+	}
+	glfwMakeContextCurrent(window);
+	#ifdef __EMSCRIPTEN__
+	#else
+		gladLoadGL();
+	#endif
+	//glfwSwapInterval(1);
+}
+'''
+
+GLFW_SHADERS = r'''
+static const char *vertex_shader_text =
+	"uniform mat4 MVP;\n"
+	"attribute vec3 vCol;\n"
+	"attribute vec2 vPos;\n"
+	"varying vec3 color;\n"
+	"void main()\n"
+	"{\n"
+	"    gl_Position = MVP * vec4(vPos, 0.0, 1.0);\n"
+	"    color = vCol;\n"
+	"}\n";
+
+static const char *fragment_shader_text =
+	"precision mediump float;\n"
+	"varying vec3 color;\n"
+	"void main()\n"
+	"{\n"
+	"    gl_FragColor = vec4(color, 1.0);\n"
+	"}\n";
+
+
+EMSCRIPTEN_KEEPALIVE
+extern void netghost_init_shaders(){
+
+	GLint vertex_shader = glCreateShader(GL_VERTEX_SHADER);
+	glShaderSource(vertex_shader, 1, &vertex_shader_text, NULL);
+	glCompileShader(vertex_shader);
+
+	GLint fragment_shader = glCreateShader(GL_FRAGMENT_SHADER);
+	glShaderSource(fragment_shader, 1, &fragment_shader_text, NULL);
+	glCompileShader(fragment_shader);
+
+	program = glCreateProgram();
+	glAttachShader(program, vertex_shader);
+	glAttachShader(program, fragment_shader);
+	glLinkProgram(program);
+
+
+	mvp_location = glGetUniformLocation(program, "MVP");
+	vpos_location = glGetAttribLocation(program, "vPos");
+	vcol_location = glGetAttribLocation(program, "vCol");
+	glEnableVertexAttribArray(vpos_location);
+	glVertexAttribPointer(vpos_location, 2, GL_FLOAT, GL_FALSE,
+						  sizeof(struct Verts2D), (void *)0);
+	glEnableVertexAttribArray(vcol_location);
+	glVertexAttribPointer(vcol_location, 3, GL_FLOAT, GL_FALSE,
+						  sizeof(struct Verts2D), (void *)(sizeof(float) * 2));
+
+
+}
+'''
+
+GLFW_MAIN = r'''
+EMSCRIPTEN_KEEPALIVE
+int main(){
+	printf("enter main\n");
+	netghost_window_init();
+
+	printf("init meshes\n");
+	netghost_init_meshes();
+
+	printf("init shaders\n");
+	netghost_init_shaders();
+
+	printf("set main loop\n");
+	emscripten_set_main_loop(netghost_redraw, 0, true);
+}
+
 '''
 
 def build_glfw( gen_ctypes = {}, gen_js = {}):
-	o = [GLFW_HEADER]
+	if gen_js is not None:
+		gen_js['netghost_window_init'] = 'function () {Module.ccall("netghost_window_init", "number", [], []);}'
+		gen_js['netghost_init_meshes'] = 'function () {Module.ccall("netghost_init_meshes", "number", [], []);}'
+		gen_js['netghost_redraw'] = 'function () {Module.ccall("netghost_redraw", "number", [], []);}'
+
+
+	o = [GLFW_HEADER, GLFW_WIN, GLFW_SHADERS]
 	helper_funcs = []
 
 	init_meshes = [
@@ -254,12 +356,14 @@ def build_glfw( gen_ctypes = {}, gen_js = {}):
 	draw_loop = [
 		'EMSCRIPTEN_KEEPALIVE',
 		'extern void netghost_redraw(){',
+		'	printf("redraw...\\n");',
 		'	float ratio;',
 		'	int width, height;',
-		'	mat4x4 m, p, mvp;',
+		'	mat4x4 matrix, p, mvp;',
 		'	glfwGetFramebufferSize(window, &width, &height);',
 		'	ratio = width / (float)height;',
 		'	glViewport(0, 0, width, height);',
+		'	glClearColor(0.07f, 0.13f, 0.17f, 1.0f);',
 		'	glClear(GL_COLOR_BUFFER_BIT);',
 
 	]
@@ -359,11 +463,11 @@ def build_glfw( gen_ctypes = {}, gen_js = {}):
 
 			draw_loop += [
 				'	printf("drawing: %s");' % n,
-				'	mat4x4_identity(m);',
-				'	mat4x4_position(m, transform_%s[0],transform_%s[1],transform_%s[2]);' %(n,n,n),
+				'	mat4x4_identity(matrix);',
+				'	mat4x4_position(matrix, transform_%s[0],transform_%s[1],transform_%s[2]);' %(n,n,n),
 				#'	mat4x4_rotate_Z(m, m, (float)glfwGetTime());',
 				'	mat4x4_ortho(p, -ratio, ratio, -1.f, 1.f, 1.f, -1.f);',
-				'	mat4x4_mul(mvp, p, m);',
+				'	mat4x4_mul(mvp, p, matrix);',
 
 				'	glUseProgram(program);',
 				'	glUniformMatrix4fv(mvp_location, 1, GL_FALSE, (const GLfloat *)mvp);',
@@ -396,18 +500,51 @@ def build_glfw( gen_ctypes = {}, gen_js = {}):
 	init_meshes.append('}')
 
 	o = "\n".join(
-		o + helper_funcs + init_meshes + draw_loop
+		o + helper_funcs + init_meshes + draw_loop + [GLFW_MAIN]
 	)
 	return o
 
+
+def gen_js_wrapper( info ):
+	js = ['var ghostapi = {']
+	for n in info:
+		js.append('	%s : %s,' % (n, info[n]))
+	js.append('}')
+	print('\n'.join(js))
+	return '\n'.join(js)
+
 def gen_glfw(output='/tmp/test-glfw.html'):
-	cpp = build_glfw()
+	gen_js = {}
+	cpp = build_glfw( gen_js=gen_js )
 	print(cpp)
 	tmp = '/tmp/test-glfw.c'
 	open(tmp, 'w').write(cpp)
+
+
+	jslib = '/tmp/ghostlib.js'
+	basisu_webgl = os.path.join(_thisdir, 'basis_universal/webgl/texture/')
+	assert os.path.isdir(basisu_webgl)
+	js = [
+		'console.log("ghostnet: post wasm load stage");',
+		'console.log("ghostnet: extern C functions: %s");' % ','.join( list(gen_js.keys()) ),
+		gen_js_wrapper( gen_js ),
+		open(os.path.join(basisu_webgl, 'renderer.js')).read(),
+		open(os.path.join(basisu_webgl, 'dxt-to-rgb565.js')).read(),
+		'ghostapi.dxtToRgb565 = dxtToRgb565;',
+		'ghostapi.basisu_renderer = Renderer;',
+	]
+	if '__ghostuser__' in gen_js:
+		## call user scripts
+		js.append('setTimeout(ghostapi.__ghostuser__, 1000);')
+
+	open(jslib, 'w').write( '\n'.join(js) )
+
+
 	cmd = [
 		EMCC, '-o', output, 
-		#'-std=c++1z', 
+		#'--no-entry',
+		'-sEXPORTED_RUNTIME_METHODS=ccall,cwrap',
+		'--post-js', jslib,
 		"-s","FETCH",
 		"-s","SINGLE_FILE",
 		"-s","ENVIRONMENT=web",
@@ -421,6 +558,11 @@ def gen_glfw(output='/tmp/test-glfw.html'):
 	]
 	print(cmd)
 	subprocess.check_call(cmd)
+
+	## this is required because some browsers will not open files in /tmp
+	os.system("cp -v %s ~/Desktop/netghost.html" % output)
+	webbrowser.open(os.path.expanduser("~/Desktop/netghost.html"))
+
 
 if __name__ == "__main__":
 	if '--test' in sys.argv:
