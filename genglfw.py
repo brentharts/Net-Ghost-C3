@@ -222,12 +222,16 @@ int main(void)
 
 GLFW_HEADER = '''
 #ifdef __EMSCRIPTEN__
-#include <emscripten.h>
-#define GL_GLEXT_PROTOTYPES
-#define EGL_EGLEXT_PROTOTYPES
+	#include <emscripten.h>
+	#define GL_GLEXT_PROTOTYPES
+	#define EGL_EGLEXT_PROTOTYPES
 #else
-#include <glad/glad.h>
+	//#include <glad/glad.h>
+	#include <GLES2/gl2.h>
+	#include <EGL/egl.h>
+	#define EMSCRIPTEN_KEEPALIVE
 #endif
+
 #include <GLFW/glfw3.h>
 #include "linmath.h"
 #include <stdlib.h>
@@ -249,11 +253,20 @@ GLFW_WIN = '''
 GLFWwindow *window;
 
 EMSCRIPTEN_KEEPALIVE
-extern void netghost_window_init() {
+extern void netghost_window_init(int w, int h) {
 	if (!glfwInit()) exit(EXIT_FAILURE);
-	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 2);
-	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
-	window = glfwCreateWindow(640, 480, "Simple example", NULL, NULL);
+
+	#ifdef __EMSCRIPTEN__
+		glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 2);
+		glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
+	#else
+		glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+		glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+		glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+	#endif
+
+
+	window = glfwCreateWindow(w, h, "NetGhost", NULL, NULL);
 	if (!window) {
 		glfwTerminate();
 		exit(EXIT_FAILURE);
@@ -261,11 +274,15 @@ extern void netghost_window_init() {
 	glfwMakeContextCurrent(window);
 	#ifdef __EMSCRIPTEN__
 	#else
-		gladLoadGL();
+//		gladLoadGL();
 	#endif
 	//glfwSwapInterval(1);
 }
 '''
+
+
+
+
 
 GLFW_SHADERS = r'''
 static const char *vertex_shader_text =
@@ -323,7 +340,7 @@ GLFW_MAIN = r'''
 EMSCRIPTEN_KEEPALIVE
 int main(){
 	printf("enter main\n");
-	netghost_window_init();
+	netghost_window_init(640,480);
 
 	printf("init meshes\n");
 	netghost_init_meshes();
@@ -332,14 +349,23 @@ int main(){
 	netghost_init_shaders();
 
 	printf("set main loop\n");
-	emscripten_set_main_loop(netghost_redraw, 0, true);
+
+	#ifdef __EMSCRIPTEN__
+		emscripten_set_main_loop(netghost_redraw, 0, true);
+	#else
+		while (!glfwWindowShouldClose(window))
+			netghost_redraw();
+	#endif
 }
 
 '''
 
 def build_glfw( gen_ctypes = {}, gen_js = {}):
+	if gen_ctypes is not None:
+		gen_ctypes['netghost_window_init'] = [ctypes.c_int, ctypes.c_int]
+
 	if gen_js is not None:
-		gen_js['netghost_window_init'] = 'function () {Module.ccall("netghost_window_init", "number", [], []);}'
+		gen_js['netghost_window_init'] = 'function (x,y) {Module.ccall("netghost_window_init", "number", ["number", "number"], [x,y]);}'
 		gen_js['netghost_init_meshes'] = 'function () {Module.ccall("netghost_init_meshes", "number", [], []);}'
 		gen_js['netghost_redraw'] = 'function () {Module.ccall("netghost_redraw", "number", [], []);}'
 
@@ -356,7 +382,7 @@ def build_glfw( gen_ctypes = {}, gen_js = {}):
 	draw_loop = [
 		'EMSCRIPTEN_KEEPALIVE',
 		'extern void netghost_redraw(){',
-		'	printf("redraw...\\n");',
+		#'	printf("redraw...\\n");',
 		'	float ratio;',
 		'	int width, height;',
 		'	mat4x4 matrix, p, mvp;',
@@ -462,19 +488,12 @@ def build_glfw( gen_ctypes = {}, gen_js = {}):
 				gen_js['set_%s_rot' % n] = 'function (x,y,z){Module.ccall("set_%s_rot","number", ["number","number","number"],[x,y,z]);}' % n
 
 			draw_loop += [
-				'	printf("drawing: %s");' % n,
+				#'	printf("drawing: %s");' % n,
 				'	mat4x4_identity(matrix);',
 				'	mat4x4_position(matrix, transform_%s[0],transform_%s[1],transform_%s[2]);' %(n,n,n),
 				#'	mat4x4_rotate_Z(m, m, (float)glfwGetTime());',
-				'	mat4x4_ortho(p, -ratio, ratio, -1.f, 1.f, 1.f, -1.f);',
-				'	mat4x4_mul(mvp, p, matrix);',
-
-				'	glUseProgram(program);',
-				'	glUniformMatrix4fv(mvp_location, 1, GL_FALSE, (const GLfloat *)mvp);',
-				'	glBindBuffer(GL_ARRAY_BUFFER, VBO_%s);' % n,
-				'	glDrawArrays(GL_TRIANGLES, 0, %s);' % len(verts),
-
 			]
+
 			if "scripts" in meshes[n] and meshes[n]["scripts"]:
 
 				if "props" in meshes[n]:
@@ -490,6 +509,18 @@ def build_glfw( gen_ctypes = {}, gen_js = {}):
 					for k in meshes[n]["props"]:
 						## sets global to local
 						draw_loop.append("	%s_prop_%s = %s;" % (n, k, k))
+
+
+			draw_loop += [
+				'	mat4x4_ortho(p, -ratio, ratio, -1.f, 1.f, 1.f, -1.f);',
+				'	mat4x4_mul(mvp, p, matrix);',
+
+				'	glUseProgram(program);',
+				'	glUniformMatrix4fv(mvp_location, 1, GL_FALSE, (const GLfloat *)mvp);',
+				'	glBindBuffer(GL_ARRAY_BUFFER, VBO_%s);' % n,
+				'	glDrawArrays(GL_TRIANGLES, 0, %s);' % len(verts),
+
+			]
 
 
 	draw_loop += [
@@ -513,7 +544,54 @@ def gen_js_wrapper( info ):
 	print('\n'.join(js))
 	return '\n'.join(js)
 
-def gen_glfw(output='/tmp/test-glfw.html'):
+def bind_lib(lib, cdefs):
+	for n in cdefs:
+		func = getattr(lib, n)
+		print('binding %s: args = %s ptr =%s' %(n,cdefs[n], func))
+		func.argtypes = tuple(cdefs[n])
+
+def gen_glfw(output='/tmp/test-glfw.so'):
+	gctypes = {}
+	cpp = build_glfw( gen_ctypes=gctypes )
+	print(cpp)
+	tmp = '/tmp/test-glfw.c'
+	open(tmp, 'w').write(cpp)
+
+	cmd = [
+		'gcc', 
+		tmp,
+		'-shared',
+		'-fPIC',
+		'-o', output, 
+		'-I', _thisdir, 
+		'-lGL', '-lGLU',
+		'-lGLEW',
+		'-lglfw', '-lm',
+	]
+	print(cmd)
+	subprocess.check_call(cmd)
+
+	lib = ctypes.CDLL(output)
+	print(lib)
+	bind_lib(lib, gctypes)
+	print("init_window")
+	lib.netghost_window_init(320, 240)
+
+	print("init_meshes")
+	lib.netghost_init_meshes()
+
+	print("init_shaders")
+	lib.netghost_init_shaders()
+
+	while True:
+		print("redraw")
+		lib.netghost_redraw()
+		#if 'set_Cube_pos' in gctypes:
+		#	lib.set_Cube_pos(random(), random(), random())
+		time.sleep(1)
+
+
+def gen_glfw_wasm(output='/tmp/test-glfw.html'):
 	gen_js = {}
 	cpp = build_glfw( gen_js=gen_js )
 	print(cpp)
@@ -567,5 +645,7 @@ def gen_glfw(output='/tmp/test-glfw.html'):
 if __name__ == "__main__":
 	if '--test' in sys.argv:
 		test_glfw()
+	elif '--wasm' in sys.argv:
+		gen_glfw_wasm()
 	else:
 		gen_glfw()
