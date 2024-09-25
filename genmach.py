@@ -15,3 +15,10 @@ if not os.path.isdir('mach'):
 	subprocess.check_call(cmd.split())
 
 
+if not os.path.isdir('./zig-bootstrap/out') or '--rebuild-zig' in sys.argv:
+	if '--native' in sys.argv:
+		cmd = './build x86_64-linux-gnu native'
+	else:
+		cmd = './build x86_64-linux-gnu baseline'
+	print(cmd)
+	subprocess.check_call(cmd.split(), cwd='./zig-bootstrap')
