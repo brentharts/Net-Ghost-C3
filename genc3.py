@@ -2,10 +2,6 @@
 # install ubuntu and debian:
 #  sudo apt-get install libglfw3-dev
 
-
-#import os, sys, subprocess, ctypes, time, json, webbrowser
-#from random import random, uniform
-#_thisdir = os.path.split(os.path.abspath(__file__))[0]
 import os, sys, subprocess
 
 if not os.path.isfile('c3-ubuntu-20.tar.gz'):
@@ -43,28 +39,19 @@ def test_triangle():
 	subprocess.check_call(cmd, cwd='c3-opengl-examples')
 
 
-def test_c3():
+def test_c3(output='test-c3-glfw.bin'):
 	cmd = [
-		C3, '--target', 'wasm32', 
+		C3, 
+		'--target', 'linux-x64',
 		'--output-dir', '/tmp',
 		'--obj-out', '/tmp',
+		'--build-dir', '/tmp',
 		'--print-output',
-		'--strip-unused=no',
-		#'compile-only', 
-		'static-lib',
-		'./c3-opengl-examples/dependencies/glfw.c3',
-	]
-	#print(cmd)
-	#subprocess.check_call(cmd)
-	cmd = [
-		C3, '--target', 'wasm32', 
-		#'--libdir', os.path.abspath('./c3-opengl-examples/dependencies'),
-		#'--libdir', '/tmp',
-		#'--lib', 'glfw',
-		#'--lib', 'opengl',
-		#'--lib', 'helpers',
-		#'/tmp/glfw.o',
-		'compile-only', 
+		'-o', output,
+
+		'-l', 'glfw',
+
+		'compile', 
 
 		'./c3-opengl-examples/examples/tri.c3',
 		'./opengl-c3/build/gl.c3',
@@ -74,6 +61,7 @@ def test_c3():
 	]
 	print(cmd)
 	subprocess.check_call(cmd)
+	subprocess.check_call(['/tmp/'+output])
 
 if __name__=='__main__':
 	if '--simple' in sys.argv:
