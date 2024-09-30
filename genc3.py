@@ -1,14 +1,11 @@
 #!/usr/bin/python3
-# install ubuntu and debian:
-#  sudo apt-get install libglfw3-dev
-
+# install ubuntu and debian: sudo apt-get install libglfw3-dev
 import os, sys, subprocess
 
 if not os.path.isfile('c3-ubuntu-20.tar.gz'):
 	cmd = 'wget -c https://github.com/c3lang/c3c/releases/download/latest/c3-ubuntu-20.tar.gz'
 	print(cmd)
 	subprocess.check_call(cmd.split())
-
 
 if not os.path.isdir('c3'):
 	cmd = 'tar -xvf c3-ubuntu-20.tar.gz'
@@ -38,21 +35,41 @@ def test_triangle():
 	print(cmd)
 	subprocess.check_call(cmd, cwd='c3-opengl-examples')
 
+def test_c3(output='test-c3-glfw.bin', opt='--opt' in sys.argv, wasm='--wasm' in sys.argv):
+	if opt:
+		output = output.replace('.bin', '.opt.bin')
+	if wasm:
+		output = output.replace('.bin', '.wasm.bin')
 
-def test_c3(output='test-c3-glfw.bin'):
-	cmd = [
-		C3, 
-		'--target', 'linux-x64',
+	cmd = [C3]
+	if wasm:
+		cmd += [
+			'--target', 'wasm32',
+			'--linker=custom', './emsdk/upstream/bin/wasm-ld'
+		]
+	else:
+		cmd += ['--target', 'linux-x64']
+	mode = 'compile'
+
+	cmd += [
 		'--output-dir', '/tmp',
 		'--obj-out', '/tmp',
 		'--build-dir', '/tmp',
 		'--print-output',
 		'-o', output,
+	]
+	if wasm:
+		cmd += [#'--link-libc=no', '--use-stdlib=no', 
+			'--no-entry', '--reloc=none']
+		pass
+	else:
+		cmd += ['-l', 'glfw']
 
-		'-l', 'glfw',
+	if opt:
+		cmd.append('-Oz')
 
-		'compile', 
-
+	cmd += [
+		mode, 
 		'./c3-opengl-examples/examples/tri.c3',
 		'./opengl-c3/build/gl.c3',
 		'./c3-opengl-examples/dependencies/glfw.c3',
@@ -60,8 +77,21 @@ def test_c3(output='test-c3-glfw.bin'):
 
 	]
 	print(cmd)
-	subprocess.check_call(cmd)
-	subprocess.check_call(['/tmp/'+output])
+	res = subprocess.check_output(cmd).decode('utf-8')
+	ofiles = []
+	for ln in res.splitlines():
+		if ln.endswith('.o'):
+			ofiles.append(ln.strip())
+	print(ofiles)
+	os.system('ls -lh /tmp/*.bin')
+	os.system('ls -lh /tmp/*.o')
+
+	if '--run' in sys.argv:
+		subprocess.check_call(['/tmp/'+output])
+	if wasm:
+		cmd = ['./emsdk/upstream/bin/llvm-objdump', '--syms', '/tmp/'+output+'.wasm']
+		print(cmd)
+		subprocess.check_call(cmd)
 
 if __name__=='__main__':
 	if '--simple' in sys.argv:
